@@ -1,9 +1,18 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:vehicle_registration_app/models/order_model.dart';
 import 'package:vehicle_registration_app/screens/document_upload_screen.dart';
 import 'package:vehicle_registration_app/screens/vehicle_receipt_screen.dart';
 import 'package:vehicle_registration_app/screens/vehicle_return_screen.dart';
+import 'package:vehicle_registration_app/services/staff_service.dart';
+import 'package:vehicle_registration_app/widgets/in_app_document_viewer.dart';
 
-class OrderDetailScreen extends StatelessWidget {
+class OrderDetailScreen extends StatefulWidget {
   final String orderId;
   final String customerName;
   final String statusLabel;
@@ -11,11 +20,194 @@ class OrderDetailScreen extends StatelessWidget {
 
   const OrderDetailScreen({
     super.key,
-    this.orderId = 'DK001',
-    this.customerName = 'Trần Minh Tuấn',
-    this.statusLabel = 'Chờ xử lý',
-    this.statusType = OrderStatusType.pending,
+    required this.orderId,
+    required this.customerName,
+    required this.statusLabel,
+    required this.statusType,
   });
+
+  @override
+  State<OrderDetailScreen> createState() => _OrderDetailScreenState();
+}
+
+class _OrderDetailScreenState extends State<OrderDetailScreen> {
+  static const String _docWebAssetPath = 'text/order_2_524dab46.docx';
+  static const String _pdfWebAssetPath = 'text/order_2_524dab46.pdf';
+  static const Duration _minInterval = Duration(seconds: 5);
+  static const Duration _maxInterval = Duration(seconds: 30);
+  static const double _noiseThreshold = 5.0;
+  static const double _distanceThreshold = 20.0;
+  static const double _headingThreshold = 15.0;
+
+  final StaffService _staffService = StaffService();
+  OrderModel? _order;
+  bool _isLoading = true;
+  StreamSubscription<Position>? _positionStream;
+  Position? _lastPushedPosition;
+  double? _lastHeading;
+  DateTime? _lastPushedTime;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDetail();
+  }
+
+  @override
+  void dispose() {
+    _positionStream?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadDetail() async {
+    setState(() => _isLoading = true);
+    try {
+      final order = await _staffService.getOrderDetail(widget.orderId);
+      debugPrint(
+        'Order detail map data => address: ${order.stationAddress}, lat: ${order.stationLat}, lng: ${order.stationLng}',
+      );
+      if (!mounted) return;
+      setState(() {
+        _order = order;
+        _isLoading = false;
+      });
+      if (_trackingStatuses.contains(order.statusType)) {
+        await _startTracking();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Loi tai chi tiet: $e')),
+      );
+    }
+  }
+
+  static const Set<String> _trackingStatuses = {
+    'confirmed',
+    'en_route',
+    'receiving',
+    'inspecting',
+    'returning',
+    'in_progress',
+    'waiting_payment',
+  };
+
+  Future<void> _startTracking() async {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return;
+    }
+
+    await _sendCurrentLocation();
+    await _positionStream?.cancel();
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 0,
+      ),
+    ).listen((position) => _processNewPosition(position));
+
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _stopTracking() async {
+    await _positionStream?.cancel();
+    _positionStream = null;
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _sendCurrentLocation() async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+      await _processNewPosition(position, forcePush: true);
+    } catch (_) {}
+  }
+
+  Future<void> _processNewPosition(Position position, {bool forcePush = false}) async {
+    final order = _order;
+    if (order == null) return;
+
+    final now = DateTime.now();
+    var shouldPush = forcePush;
+    var distance = 0.0;
+    var newHeading = _lastHeading;
+    var timeSinceLast = Duration.zero;
+    var reason = forcePush ? 'Force push' : 'Filtered';
+
+    if (!forcePush && _lastPushedPosition != null && _lastPushedTime != null) {
+      distance = Geolocator.distanceBetween(
+        _lastPushedPosition!.latitude,
+        _lastPushedPosition!.longitude,
+        position.latitude,
+        position.longitude,
+      );
+      newHeading = Geolocator.bearingBetween(
+        _lastPushedPosition!.latitude,
+        _lastPushedPosition!.longitude,
+        position.latitude,
+        position.longitude,
+      );
+      timeSinceLast = now.difference(_lastPushedTime!);
+
+      if (distance < _noiseThreshold && timeSinceLast < _maxInterval) return;
+      if (distance >= _distanceThreshold && timeSinceLast >= _minInterval) {
+        shouldPush = true;
+        reason = 'Distance threshold';
+      } else if (_lastHeading != null) {
+        final diff = (newHeading - _lastHeading!).abs();
+        final normalized = diff > 180 ? 360 - diff : diff;
+        if (normalized >= _headingThreshold && timeSinceLast >= _minInterval) {
+          shouldPush = true;
+          reason = 'Heading threshold';
+        }
+      }
+      if (timeSinceLast >= _maxInterval) {
+        shouldPush = true;
+        reason = 'Heartbeat';
+      }
+    } else {
+      shouldPush = true;
+      reason = 'First push';
+    }
+
+    if (!shouldPush) return;
+    try {
+      await _staffService.updateDriverLocation(
+        order.id,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy,
+      );
+      _lastPushedPosition = position;
+      _lastPushedTime = now;
+      _lastHeading = newHeading;
+      debugPrint('Driver location pushed: $reason');
+    } catch (_) {}
+  }
+
+  OrderStatusType _resolveStatusType(OrderModel order) {
+    switch (order.statusType) {
+      case 'completed':
+        return OrderStatusType.done;
+      case 'cancelled':
+        return OrderStatusType.cancelled;
+      case 'pending':
+        return OrderStatusType.pending;
+      default:
+        return OrderStatusType.processing;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -23,57 +215,35 @@ class OrderDetailScreen extends StatelessWidget {
       backgroundColor: const Color(0xFFF5F6FA),
       body: Column(
         children: [
-          _buildFixedHeader(context),
+          _buildHeader(context),
           Expanded(
-            child: SingleChildScrollView(
-              physics: const ClampingScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-              child: Column(
-                children: [
-                  _buildCustomerCard(),
-                  const SizedBox(height: 12),
-                  _buildVehicleCard(),
-                  const SizedBox(height: 12),
-                  _buildAppointmentCard(),
-                  const SizedBox(height: 12),
-                  _buildServiceCard(),
-                  const SizedBox(height: 12),
-                  if (statusType == OrderStatusType.pending)
-                    _buildNoteCard(),
-                  if (statusType == OrderStatusType.pending)
-                    const SizedBox(height: 20),
-                  _buildStatusActions(context),
-                ],
-              ),
-            ),
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _order == null
+                    ? const Center(child: Text('Khong tai duoc chi tiet don hang'))
+                    : RefreshIndicator(
+                        onRefresh: _loadDetail,
+                        child: ListView(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                          children: _buildSections(context, _order!),
+                        ),
+                      ),
           ),
-          _buildBottomNavBar(context),
+          _buildBottomNavBar(),
         ],
       ),
     );
   }
 
-  Widget _buildFixedHeader(BuildContext context) {
-    Color badgeBg;
-    Color badgeText;
-    switch (statusType) {
-      case OrderStatusType.pending:
-        badgeBg = const Color(0xFFFFF3E0);
-        badgeText = const Color(0xFFE65100);
-        break;
-      case OrderStatusType.processing:
-        badgeBg = const Color(0xFFE3F2FD);
-        badgeText = const Color(0xFF1565C0);
-        break;
-      case OrderStatusType.done:
-        badgeBg = const Color(0xFFE8F5E9);
-        badgeText = const Color(0xFF2E7D32);
-        break;
-      case OrderStatusType.cancelled:
-        badgeBg = const Color(0xFFF3F4F6);
-        badgeText = const Color(0xFF6B7280);
-        break;
-    }
+  Widget _buildHeader(BuildContext context) {
+    final order = _order;
+    final statusType = order != null ? _resolveStatusType(order) : widget.statusType;
+    final (badgeBg, badgeText) = switch (statusType) {
+      OrderStatusType.pending => (const Color(0xFFFFF3E0), const Color(0xFFE65100)),
+      OrderStatusType.processing => (const Color(0xFFE3F2FD), const Color(0xFF1565C0)),
+      OrderStatusType.done => (const Color(0xFFE8F5E9), const Color(0xFF2E7D32)),
+      OrderStatusType.cancelled => (const Color(0xFFF3F4F6), const Color(0xFF6B7280)),
+    };
 
     return Container(
       decoration: const BoxDecoration(
@@ -82,123 +252,122 @@ class OrderDetailScreen extends StatelessWidget {
           bottomLeft: Radius.circular(24),
           bottomRight: Radius.circular(24),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x0A000000),
-            blurRadius: 12,
-            offset: Offset(0, 3),
-          ),
-        ],
       ),
       child: SafeArea(
         bottom: false,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: ClipRRect(
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(24),
-                  bottomRight: Radius.circular(24),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              GestureDetector(
+                onTap: () => Navigator.of(context).pop(),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.arrow_back_rounded, size: 18, color: Color(0xFF374151)),
+                    SizedBox(width: 6),
+                    Text('Quay lai', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+                  ],
                 ),
-                child: CustomPaint(painter: _CircleDecorPainter()),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              const SizedBox(height: 12),
+              Row(
                 children: [
-                  GestureDetector(
-                    onTap: () => Navigator.of(context).pop(),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(Icons.arrow_back_rounded,
-                            size: 18, color: Color(0xFF374151)),
-                        SizedBox(width: 6),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Chi tiet don hang',
+                          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 3),
                         Text(
-                          'Quay lại',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Color(0xFF374151),
-                            fontWeight: FontWeight.w500,
-                          ),
+                          order?.order_code.isNotEmpty == true ? order!.order_code : widget.orderId,
+                          style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Chi tiết đơn hàng',
-                              style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF111827),
-                                letterSpacing: -0.3,
-                              ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              orderId,
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: Color(0xFF6B7280),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: badgeBg,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          statusLabel,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: badgeText,
-                          ),
-                        ),
-                      ),
-                    ],
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: badgeBg,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      order?.status ?? widget.statusLabel,
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: badgeText),
+                    ),
                   ),
                 ],
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildSectionCard({
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    required List<Widget> rows,
-  }) {
+  List<Widget> _buildSections(BuildContext context, OrderModel order) {
+    final statusType = _resolveStatusType(order);
+    return [
+      _infoCard(
+        'Thong tin khach hang',
+        Icons.person_outline_rounded,
+        const Color(0xFF16A34A),
+        [
+          _infoRow('Ho ten', order.customerName),
+          _infoRow('So dien thoai', order.customerPhone),
+        ],
+      ),
+      const SizedBox(height: 12),
+      _infoCard(
+        'Thong tin phuong tien',
+        Icons.directions_car_outlined,
+        const Color(0xFF2563EB),
+        [
+          _infoRow('Bien so', order.plateNumber),
+          _infoRow('Loai xe', order.vehicleType),
+          _infoRow('Hang xe', order.vehicleBrand),
+          _infoRow('Mau sac', order.vehicleColor),
+        ],
+      ),
+      const SizedBox(height: 12),
+      _infoCard(
+        'Thong tin lich hen',
+        Icons.schedule_rounded,
+        const Color(0xFF7C3AED),
+        [
+          _infoRow('Ngay hen', order.appointmentDate),
+          _infoRow('Gio hen', order.appointmentTime),
+          _infoRow('Dia diem', order.stationAddress, multiline: true),
+        ],
+      ),
+      const SizedBox(height: 12),
+      _buildServiceCard(order),
+      const SizedBox(height: 12),
+      _buildMapCard(order),
+      const SizedBox(height: 12),
+      InAppDocumentViewer(
+        orderId: order.id,
+      ),
+      if ((order.note ?? '').trim().isNotEmpty) ...[
+        const SizedBox(height: 12),
+        _buildNoteCard(order.note!.trim()),
+      ],
+      const SizedBox(height: 20),
+      _buildStatusActions(context, order, statusType),
+    ];
+  }
+
+  Widget _infoCard(String title, IconData icon, Color color, List<Widget> rows) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x07000000),
-            blurRadius: 10,
-            offset: Offset(0, 2),
-          ),
-        ],
+        boxShadow: const [BoxShadow(color: Color(0x07000000), blurRadius: 10, offset: Offset(0, 2))],
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -207,20 +376,11 @@ class OrderDetailScreen extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(icon, color: iconColor, size: 20),
+                Icon(icon, color: color, size: 20),
                 const SizedBox(width: 8),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF111827),
-                  ),
-                ),
+                Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               ],
             ),
-            const SizedBox(height: 14),
-            const Divider(height: 1, color: Color(0xFFF3F4F6)),
             const SizedBox(height: 14),
             ...rows,
           ],
@@ -229,34 +389,21 @@ class OrderDetailScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildInfoRow(String label, String value,
-      {Color? valueColor, bool valueBold = false, bool wrap = false}) {
+  Widget _infoRow(String label, String value, {bool multiline = false}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
-        crossAxisAlignment:
-        wrap ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+        crossAxisAlignment: multiline ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
           SizedBox(
             width: 110,
-            child: Text(
-              label,
-              style: const TextStyle(
-                fontSize: 13,
-                color: Color(0xFF6B7280),
-              ),
-            ),
+            child: Text(label, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
           ),
           Expanded(
             child: Text(
               value,
               textAlign: TextAlign.right,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight:
-                valueBold ? FontWeight.bold : FontWeight.w500,
-                color: valueColor ?? const Color(0xFF111827),
-              ),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
             ),
           ),
         ],
@@ -264,585 +411,254 @@ class OrderDetailScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildCustomerCard() {
-    return _buildSectionCard(
-      icon: Icons.person_outline_rounded,
-      iconColor: const Color(0xFF16A34A),
-      title: 'Thông tin khách hàng',
-      rows: [
-        _buildInfoRow('Họ tên:', customerName, valueBold: true),
-        _buildInfoRow('Số điện thoại:', '0123456789',
-            valueColor: const Color(0xFF16A34A), valueBold: true),
-      ],
-    );
-  }
-
-  Widget _buildVehicleCard() {
-    return _buildSectionCard(
-      icon: Icons.directions_car_outlined,
-      iconColor: const Color(0xFF2563EB),
-      title: 'Thông tin phương tiện',
-      rows: [
-        _buildInfoRow('Biển kiểm soát:', '30A-123.45', valueBold: true),
-        _buildInfoRow('Loại xe:', 'Ô tô con'),
-        _buildInfoRow('Hãng xe:', 'Toyota Vios', valueBold: true),
-        _buildInfoRow('Màu sắc:', 'Trắng'),
-      ],
-    );
-  }
-
-  Widget _buildAppointmentCard() {
-    return _buildSectionCard(
-      icon: Icons.schedule_rounded,
-      iconColor: const Color(0xFF7C3AED),
-      title: 'Thông tin lịch hẹn',
-      rows: [
-        _buildInfoRow('Ngày hẹn:', '29/01/2026', valueBold: true),
-        _buildInfoRow('Giờ hẹn:', '08:30', valueBold: true),
-        _buildInfoRow(
-          'Địa điểm:',
-          'Trạm Cầu Giấy - 123 Phố Huế, Hai Bà Trưng, Hà Nội',
-          valueBold: true,
-          wrap: true,
+  Widget _buildServiceCard(OrderModel order) {
+    final services = order.services ?? const <OrderServiceItem>[];
+    return _infoCard(
+      'Dich vu',
+      Icons.check_circle_outline_rounded,
+      const Color(0xFF16A34A),
+      [
+        if (services.isEmpty)
+          const Text('Chua co dich vu duoc khai bao', style: TextStyle(fontSize: 13))
+        else
+          ...services.map(
+            (service) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                children: [
+                  Expanded(child: Text(service.name, style: const TextStyle(fontSize: 13))),
+                  Text(service.price, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+          ),
+        const Divider(height: 20),
+        Row(
+          children: [
+            const Text('Tong cong', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Spacer(),
+            Text(order.totalCost ?? '0', style: const TextStyle(fontWeight: FontWeight.bold)),
+          ],
         ),
       ],
     );
   }
 
-  Widget _buildServiceCard() {
+  Widget _buildMapCard(OrderModel order) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x07000000),
-            blurRadius: 10,
-            offset: Offset(0, 2),
-          ),
-        ],
+        boxShadow: const [BoxShadow(color: Color(0x07000000), blurRadius: 10, offset: Offset(0, 2))],
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: const [
-                Icon(Icons.check_circle_outline_rounded,
-                    color: Color(0xFF16A34A), size: 20),
+            const Row(
+              children: [
+                Icon(Icons.location_on_rounded, color: Color(0xFF2563EB), size: 20),
                 SizedBox(width: 8),
-                Text(
-                  'Dịch vụ',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF111827),
-                  ),
-                ),
+                Text('Ban do tram dang kiem', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
               ],
             ),
-            const SizedBox(height: 14),
-            const Divider(height: 1, color: Color(0xFFF3F4F6)),
-            const SizedBox(height: 14),
-            _buildServiceRow('Kiểm tra an toàn kỹ thuật', '340.000đ'),
-            const SizedBox(height: 10),
-            _buildServiceRow('Kiểm tra khí thải', '120.000đ'),
-            const SizedBox(height: 14),
-            const Divider(height: 1, color: Color(0xFFF3F4F6)),
             const SizedBox(height: 12),
-            Row(
-              children: const [
-                Text(
-                  'Tổng cộng:',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF111827),
-                  ),
-                ),
-                Spacer(),
-                Text(
-                  '460.000đ',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF16A34A),
-                  ),
-                ),
-              ],
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: SizedBox(
+                height: 200,
+                child: _buildMapContent(order.stationLat, order.stationLng, order.stationAddress),
+              ),
             ),
+            if (order.stationAddress.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(order.stationAddress, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+            ],
           ],
         ),
       ),
     );
   }
 
-  Widget _buildServiceRow(String name, String price) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            name,
-            style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
-          ),
-        ),
-        Text(
-          price,
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF111827),
-          ),
-        ),
-      ],
+  Widget _buildMapContent(double? lat, double? lng, String address) {
+    // Mặc định: trung tâm Hà Nội nếu không có tọa độ
+    const defaultCenter = LatLng(21.0285, 105.8542);
+    final hasCoords = lat != null && lng != null;
+    final center = hasCoords ? LatLng(lat, lng) : defaultCenter;
+
+    return GoogleMap(
+      initialCameraPosition: CameraPosition(
+        target: center,
+        zoom: hasCoords ? 15 : 12,
+      ),
+      markers: hasCoords
+          ? {
+              Marker(
+                markerId: const MarkerId('station'),
+                position: center,
+                infoWindow: InfoWindow(title: address.isNotEmpty ? address : 'Trạm đăng kiểm'),
+              ),
+            }
+          : {},
+      myLocationButtonEnabled: false,
+      zoomControlsEnabled: true,
+      gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
+        Factory<OneSequenceGestureRecognizer>(() => EagerGestureRecognizer()),
+      },
     );
   }
 
-  Widget _buildNoteCard() {
+  Widget _buildNoteCard(String note) {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFFFFFBEB),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFFDE68A), width: 1),
+        border: Border.all(color: const Color(0xFFFDE68A)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: const [
-          Icon(Icons.info_outline_rounded,
-              color: Color(0xFFF59E0B), size: 18),
-          SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Ghi chú',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFFB45309),
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  'Khách hàng yêu cầu kiểm tra kỹ hệ thống phanh',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Color(0xFFB45309),
-                    height: 1.4,
-                  ),
-                ),
-              ],
-            ),
-          ),
+        children: [
+          const Icon(Icons.info_outline_rounded, color: Color(0xFFF59E0B), size: 18),
+          const SizedBox(width: 8),
+          Expanded(child: Text(note, style: const TextStyle(fontSize: 13, color: Color(0xFFB45309)))),
         ],
       ),
     );
   }
 
-  Widget _buildStatusActions(BuildContext context) {
+  Widget _buildStatusActions(BuildContext context, OrderModel order, OrderStatusType statusType) {
     switch (statusType) {
       case OrderStatusType.pending:
-        return _buildPendingActions(context);
+        return _actionButtons(context, order, pending: true);
       case OrderStatusType.processing:
-        return _buildProcessingActions(context);
+        return _actionButtons(context, order);
       case OrderStatusType.done:
-        return _buildDoneState();
+        return const Center(child: Text('Da hoan thanh'));
       case OrderStatusType.cancelled:
         return const SizedBox.shrink();
     }
   }
 
-  Widget _buildPendingActions(BuildContext context) {
+  Widget _actionButtons(BuildContext context, OrderModel order, {bool pending = false}) {
     return Column(
       children: [
-        Row(
-          children: [
-            Expanded(child: _btnPrimary(
-              icon: Icons.phone_rounded,
-              label: 'Gọi khách',
-              colors: [const Color(0xFF16A34A), const Color(0xFF15803D)],
-              shadowColor: const Color(0xFF16A34A),
-              onTap: () {},
-            )),
-            const SizedBox(width: 12),
-            Expanded(child: _btnPrimary(
-              icon: Icons.play_circle_outline_rounded,
-              label: 'Bắt đầu',
-              colors: [const Color(0xFF3B5BF5), const Color(0xFF2563EB)],
-              shadowColor: const Color(0xFF2563EB),
-              onTap: () {},
-            )),
-          ],
-        ),
-        const SizedBox(height: 12),
-        _buildSecondaryButtons(),
-      ],
-    );
-  }
-
-  Widget _buildProcessingActions(BuildContext context) {
-    return Column(
-      children: [
-        _btnOutline(
-          icon: Icons.cancel_outlined,
-          label: 'Hủy bắt đầu & Quay lại',
-          textColor: const Color(0xFFDC2626),
-          borderColor: const Color(0xFFFECACA),
-          bgColor: const Color(0xFFFFF5F5),
-          onTap: () {},
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(child: _btnPrimary(
-              icon: Icons.check_circle_outline_rounded,
-              label: 'Nhận xe',
-              colors: [const Color(0xFF16A34A), const Color(0xFF15803D)],
-              shadowColor: const Color(0xFF16A34A),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => VehicleReceiptScreen(
-                      orderId: orderId,
-                      customerName: customerName,
-                      plate: '29B-678.90',
-                      vehicleType: 'Ô tô con',
-                      brand: 'Honda City',
-                      totalCost: '340.000đ',
+        if (pending)
+          Row(
+            children: [
+              Expanded(child: _primaryButton('Goi khach', Icons.phone_rounded, () {})),
+              const SizedBox(width: 12),
+              Expanded(child: _primaryButton('Bat dau', Icons.play_circle_outline_rounded, _startTracking)),
+            ],
+          )
+        else ...[
+          _outlineButton('Huy bat dau va quay lai', _stopTracking),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _primaryButton('Nhan xe', Icons.check_circle_outline_rounded, () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => VehicleReceiptScreen(
+                        orderId: order.id,
+                        customerName: order.customerName,
+                        plate: order.plateNumber,
+                        vehicleType: order.vehicleType,
+                        brand: order.vehicleBrand,
+                        totalCost: order.totalCost ?? '0',
+                      ),
                     ),
-                  ),
-                );
-              },
-            )),
-            const SizedBox(width: 12),
-            Expanded(child: _btnPrimary(
-              icon: Icons.check_circle_outline_rounded,
-              label: 'Trả xe',
-              colors: [const Color(0xFF7C3AED), const Color(0xFF6D28D9)],
-              shadowColor: const Color(0xFF7C3AED),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => VehicleReturnScreen(
-                      orderId: orderId,
-                      customerName: customerName,
-                      plate: '29B-678.90',
-                      vehicleType: 'Ô tô con',
-                      brand: 'Honda City',
-                      color: 'Đỏ',
+                  );
+                }),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _primaryButton('Tra xe', Icons.assignment_return_outlined, () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => VehicleReturnScreen(
+                        orderId: order.id,
+                        customerName: order.customerName,
+                        plate: order.plateNumber,
+                        vehicleType: order.vehicleType,
+                        brand: order.vehicleBrand,
+                        color: order.vehicleColor,
+                      ),
                     ),
-                  ),
-                );
-              },
-            )),
-          ],
-        ),
-        const SizedBox(height: 10),
-        _btnPrimary(
-          icon: Icons.camera_alt_outlined,
-          label: 'Chụp/Tải ảnh giấy tờ',
-          colors: [const Color(0xFF3B5BF5), const Color(0xFF2563EB)],
-          shadowColor: const Color(0xFF2563EB),
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => DocumentUploadScreen(
-                  plate: '29B-678.90',
-                  customerName: customerName,
-                ),
-              ),
-            );
-          },
-          fullWidth: true,
-        ),
-        const SizedBox(height: 10),
-        _btnPrimary(
-          icon: Icons.verified_outlined,
-          label: 'Hoàn thành kiểm định',
-          colors: [const Color(0xFF16A34A), const Color(0xFF15803D)],
-          shadowColor: const Color(0xFF16A34A),
-          onTap: () {},
-          fullWidth: true,
-        ),
-        const SizedBox(height: 12),
-        _buildSecondaryButtons(),
-      ],
-    );
-  }
-
-  Widget _buildDoneState() {
-    return Column(
-      children: [
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 28),
-          decoration: BoxDecoration(
-            color: const Color(0xFFEFFEF2),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: const Color(0xFFBBF7D0)),
-          ),
-          child: Column(
-            children: const [
-              Icon(Icons.check_circle_rounded,
-                  color: Color(0xFF16A34A), size: 48),
-              SizedBox(height: 10),
-              Text(
-                'Đã hoàn thành',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF15803D),
-                ),
-              ),
-              SizedBox(height: 4),
-              Text(
-                'Đơn hàng đã được xử lý thành công',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Color(0xFF16A34A),
-                ),
+                  );
+                }),
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 12),
-        _buildSecondaryButtons(),
+          const SizedBox(height: 10),
+          _primaryButton('Chup va tai anh giay to', Icons.camera_alt_outlined, () {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => DocumentUploadScreen(
+                  plate: order.plateNumber,
+                  customerName: order.customerName,
+                ),
+              ),
+            );
+          }, fullWidth: true),
+        ],
       ],
     );
   }
 
-  Widget _btnPrimary({
-    required IconData icon,
-    required String label,
-    required List<Color> colors,
-    required Color shadowColor,
-    required VoidCallback onTap,
-    bool fullWidth = false,
-  }) {
-    final btn = GestureDetector(
+  Widget _primaryButton(String label, IconData icon, VoidCallback onTap, {bool fullWidth = false}) {
+    return GestureDetector(
       onTap: onTap,
       child: Container(
         width: fullWidth ? double.infinity : null,
         height: 52,
         decoration: BoxDecoration(
-          gradient: LinearGradient(colors: colors),
+          gradient: const LinearGradient(colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)]),
           borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: shadowColor.withOpacity(0.35),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(icon, color: Colors.white, size: 18),
             const SizedBox(width: 8),
-            Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ],
         ),
       ),
     );
-    return btn;
   }
 
-  Widget _btnOutline({
-    required IconData icon,
-    required String label,
-    required Color textColor,
-    required Color borderColor,
-    required Color bgColor,
-    required VoidCallback onTap,
-  }) {
+  Widget _outlineButton(String label, VoidCallback onTap) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
         width: double.infinity,
         height: 50,
         decoration: BoxDecoration(
-          color: bgColor,
+          color: const Color(0xFFFFF5F5),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: borderColor),
+          border: Border.all(color: const Color(0xFFFECACA)),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: textColor, size: 18),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: TextStyle(
-                color: textColor,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
+        child: Center(
+          child: Text(label, style: const TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
         ),
       ),
     );
   }
 
-  Widget _buildSecondaryButtons() {
-    return Row(
-      children: [
-        Expanded(
-          child: GestureDetector(
-            onTap: () {},
-            child: Container(
-              height: 48,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFFE5E7EB)),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x06000000),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  Icon(Icons.chat_bubble_outline_rounded,
-                      color: Color(0xFF374151), size: 17),
-                  SizedBox(width: 7),
-                  Text(
-                    'Chat',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: GestureDetector(
-            onTap: () {},
-            child: Container(
-              height: 48,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFFE5E7EB)),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x06000000),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  Icon(Icons.navigation_outlined,
-                      color: Color(0xFF374151), size: 17),
-                  SizedBox(width: 7),
-                  Text(
-                    'Chỉ đường',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF374151),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBottomNavBar(BuildContext context) {
-    final tabs = [
-      _NavTab(icon: Icons.home_rounded, label: 'Trang chủ'),
-      _NavTab(icon: Icons.receipt_long_outlined, label: 'Đơn hàng'),
-      _NavTab(icon: Icons.person_outline_rounded, label: 'Cá nhân'),
-    ];
-
+  Widget _buildBottomNavBar() {
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 16,
-            offset: const Offset(0, -2),
-          ),
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _BottomTab(Icons.home_rounded, 'Trang chu', false),
+          _BottomTab(Icons.receipt_long_outlined, 'Don hang', true),
+          _BottomTab(Icons.person_outline_rounded, 'Ca nhan', false),
         ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            children: List.generate(tabs.length, (i) {
-              final selected = i == 1;
-              return Expanded(
-                child: GestureDetector(
-                  onTap: () {},
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        width: selected ? 32 : 0,
-                        height: 3,
-                        margin: const EdgeInsets.only(bottom: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF16A34A),
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                      Icon(
-                        tabs[i].icon,
-                        size: 24,
-                        color: selected
-                            ? const Color(0xFF16A34A)
-                            : Colors.grey.shade400,
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        tabs[i].label,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: selected
-                              ? FontWeight.w700
-                              : FontWeight.w400,
-                          color: selected
-                              ? const Color(0xFF16A34A)
-                              : Colors.grey.shade400,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }),
-          ),
-        ),
       ),
     );
   }
@@ -850,28 +666,23 @@ class OrderDetailScreen extends StatelessWidget {
 
 enum OrderStatusType { pending, processing, done, cancelled }
 
-class _NavTab {
+class _BottomTab extends StatelessWidget {
   final IconData icon;
   final String label;
-  _NavTab({required this.icon, required this.label});
-}
+  final bool selected;
 
-class _CircleDecorPainter extends CustomPainter {
+  const _BottomTab(this.icon, this.label, this.selected);
+
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.black.withOpacity(0.04)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-
-    canvas.drawCircle(
-        Offset(size.width - 32, size.height * 0.3), 48, paint);
-    canvas.drawCircle(
-        Offset(size.width - 96, size.height * 0.25), 32, paint);
-    canvas.drawCircle(Offset(24, size.height * 0.85), 56, paint);
-    canvas.drawCircle(Offset(112, size.height * 0.9), 20, paint);
+  Widget build(BuildContext context) {
+    final color = selected ? const Color(0xFF16A34A) : Colors.grey.shade400;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: color),
+        const SizedBox(height: 4),
+        Text(label, style: TextStyle(fontSize: 11, color: color)),
+      ],
+    );
   }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

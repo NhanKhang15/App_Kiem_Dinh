@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:vehicle_registration_app/models/order_model.dart';
 import 'package:vehicle_registration_app/screens/order_detail_screen.dart';
+import 'package:vehicle_registration_app/services/staff_service.dart';
 
 enum OrderFilter { all, pending, processing, done }
 
@@ -14,89 +16,59 @@ class _OrderManagementScreenState extends State<OrderManagementScreen> {
   OrderFilter _activeFilter = OrderFilter.all;
   final _searchController = TextEditingController();
   String _searchQuery = '';
+  
+  final StaffService _staffService = StaffService();
+  List<OrderModel> _allOrders = [];
+  bool _isLoading = true;
 
-  final List<_OrderItem> _allOrders = [
-    _OrderItem(
-      id: 'DK001',
-      name: 'Trần Minh Tuấn',
-      plate: '30A-123.45',
-      vehicleType: 'Ô tô con',
-      time: '08:30',
-      date: '29/01/2026',
-      address: 'Trạm Cầu Giấy - 123 Phố Huế, Hai Bà Trưng, Hà Nội',
-      status: 'Chờ xử lý',
-      statusType: _StatusType.pending,
-    ),
-    _OrderItem(
-      id: 'DK002',
-      name: 'Nguyễn Thị Hương',
-      plate: '29B-678.90',
-      vehicleType: 'Ô tô con',
-      time: '09:00',
-      date: '29/01/2026',
-      address: 'Trạm Đống Đa - 456 Giải Phóng, Hai Bà Trưng, Hà Nội',
-      status: 'Đang xử lý',
-      statusType: _StatusType.processing,
-    ),
-    _OrderItem(
-      id: 'DK003',
-      name: 'Phạm Đức Anh',
-      plate: '51F-234.56',
-      vehicleType: 'Ô tô con',
-      time: '10:30',
-      date: '29/01/2026',
-      address: 'Trạm Hoàng Mai - 78 Tam Trinh, Hoàng Mai, Hà Nội',
-      status: 'Chờ xử lý',
-      statusType: _StatusType.pending,
-    ),
-    _OrderItem(
-      id: 'DK004',
-      name: 'Lê Thị Mai',
-      plate: '43A-567.89',
-      vehicleType: 'Xe máy',
-      time: '11:00',
-      date: '29/01/2026',
-      address: 'Trạm Cầu Giấy - 123 Phố Huế, Hai Bà Trưng, Hà Nội',
-      status: 'Hoàn thành',
-      statusType: _StatusType.done,
-    ),
-    _OrderItem(
-      id: 'DK005',
-      name: 'Nguyễn Văn Hùng',
-      plate: '30K-111.22',
-      vehicleType: 'Ô tô con',
-      time: '13:30',
-      date: '29/01/2026',
-      address: 'Trạm Đống Đa - 456 Giải Phóng, Hai Bà Trưng, Hà Nội',
-      status: 'Chờ xử lý',
-      statusType: _StatusType.pending,
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _fetchOrders();
+  }
 
-  List<_OrderItem> get _filtered {
+  Future<void> _fetchOrders() async {
+    setState(() => _isLoading = true);
+    try {
+      final response = await _staffService.getRecentOrders();
+      setState(() {
+        _allOrders = response.orders;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi tải danh sách: $e')),
+        );
+      }
+    }
+  }
+
+  List<OrderModel> get _filtered {
     var list = _allOrders;
     if (_activeFilter != OrderFilter.all) {
-      final map = {
-        OrderFilter.pending: _StatusType.pending,
-        OrderFilter.processing: _StatusType.processing,
-        OrderFilter.done: _StatusType.done,
+      final filterMap = {
+        OrderFilter.pending: ['pending', 'confirmed'],
+        OrderFilter.processing: ['en_route', 'receiving', 'inspecting', 'returning', 'waiting_payment', 'in_progress'],
+        OrderFilter.done: ['completed'],
       };
-      list = list.where((o) => o.statusType == map[_activeFilter]).toList();
+      list = list.where((o) => filterMap[_activeFilter]?.contains(o.statusType) ?? false).toList();
     }
     if (_searchQuery.isNotEmpty) {
       final q = _searchQuery.toLowerCase();
       list = list
           .where((o) =>
-      o.id.toLowerCase().contains(q) ||
-          o.name.toLowerCase().contains(q) ||
-          o.plate.toLowerCase().contains(q))
+      o.order_code.toLowerCase().contains(q) ||
+          o.customerName.toLowerCase().contains(q) ||
+          o.plateNumber.toLowerCase().contains(q))
           .toList();
     }
     return list;
   }
 
-  int _count(_StatusType t) =>
-      _allOrders.where((o) => o.statusType == t).length;
+  int _count(List<String> types) =>
+      _allOrders.where((o) => types.contains(o.statusType)).length;
 
   @override
   void dispose() {
@@ -106,20 +78,24 @@ class _OrderManagementScreenState extends State<OrderManagementScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _filtered;
     return Column(
       children: [
         _buildHeader(),
         _buildFilterTabs(),
         Expanded(
-          child: filtered.isEmpty
-              ? _buildEmpty()
-              : ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-            itemCount: filtered.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (ctx, i) => _buildOrderCard(ctx, filtered[i]),
-          ),
+          child: _isLoading 
+            ? const Center(child: CircularProgressIndicator())
+            : RefreshIndicator(
+                onRefresh: _fetchOrders,
+                child: _filtered.isEmpty
+                  ? _buildEmpty()
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                      itemCount: _filtered.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 12),
+                      itemBuilder: (ctx, i) => _buildOrderCard(ctx, _filtered[i]),
+                    ),
+              ),
         ),
       ],
     );
@@ -224,9 +200,9 @@ class _OrderManagementScreenState extends State<OrderManagementScreen> {
   Widget _buildFilterTabs() {
     final filters = [
       _FilterTab(OrderFilter.all, 'Tất cả', _allOrders.length),
-      _FilterTab(OrderFilter.pending, 'Chờ xử lý', _count(_StatusType.pending)),
-      _FilterTab(OrderFilter.processing, 'Đang xử lý', _count(_StatusType.processing)),
-      _FilterTab(OrderFilter.done, 'Hoàn thành', _count(_StatusType.done)),
+      _FilterTab(OrderFilter.pending, 'Chờ xử lý', _count(['pending', 'confirmed'])),
+      _FilterTab(OrderFilter.processing, 'Đang xử lý', _count(['en_route', 'receiving', 'inspecting', 'returning', 'waiting_payment', 'in_progress'])),
+      _FilterTab(OrderFilter.done, 'Hoàn thành', _count(['completed'])),
     ];
 
     return Container(
@@ -299,28 +275,39 @@ class _OrderManagementScreenState extends State<OrderManagementScreen> {
     );
   }
 
-  Widget _buildOrderCard(BuildContext context, _OrderItem order) {
+  Widget _buildOrderCard(BuildContext context, OrderModel order) {
     Color badgeBg, badgeText, badgeBorder;
     IconData badgeIcon;
     switch (order.statusType) {
-      case _StatusType.pending:
+      case 'pending':
+      case 'confirmed':
         badgeBg = const Color(0xFFFFF7ED);
         badgeText = const Color(0xFFC2410C);
         badgeBorder = const Color(0xFFFED7AA);
         badgeIcon = Icons.access_time_rounded;
         break;
-      case _StatusType.processing:
+      case 'en_route':
+      case 'receiving':
+      case 'inspecting':
+      case 'returning':
+      case 'waiting_payment':
+      case 'in_progress':
         badgeBg = const Color(0xFFEFF6FF);
         badgeText = const Color(0xFF1D4ED8);
         badgeBorder = const Color(0xFFBFDBFE);
         badgeIcon = Icons.sync_rounded;
         break;
-      case _StatusType.done:
+      case 'completed':
         badgeBg = const Color(0xFFEFFEF2);
         badgeText = const Color(0xFF15803D);
         badgeBorder = const Color(0xFFBBF7D0);
         badgeIcon = Icons.check_circle_outline_rounded;
         break;
+      default:
+        badgeBg = const Color(0xFFF3F4F6);
+        badgeText = const Color(0xFF6B7280);
+        badgeBorder = const Color(0xFFE5E7EB);
+        badgeIcon = Icons.help_outline;
     }
 
     void goToDetail() {
@@ -328,18 +315,18 @@ class _OrderManagementScreenState extends State<OrderManagementScreen> {
         MaterialPageRoute(
           builder: (_) => OrderDetailScreen(
             orderId: order.id,
-            customerName: order.name,
+            customerName: order.customerName,
             statusLabel: order.status,
-            statusType: order.statusType == _StatusType.pending
+            statusType: ['pending', 'confirmed'].contains(order.statusType)
                 ? OrderStatusType.pending
-                : order.statusType == _StatusType.processing
+                : ['en_route', 'receiving', 'inspecting', 'returning', 'waiting_payment', 'in_progress'].contains(order.statusType)
                 ? OrderStatusType.processing
-                : order.statusType == _StatusType.done
+                : order.statusType == 'completed'
                 ? OrderStatusType.done
                 : OrderStatusType.cancelled,
           ),
         ),
-      );
+      ).then((_) => _fetchOrders());
     }
 
     return GestureDetector(
@@ -361,7 +348,7 @@ class _OrderManagementScreenState extends State<OrderManagementScreen> {
               Row(
                 children: [
                   Text(
-                    order.id,
+                    order.order_code,
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -395,7 +382,7 @@ class _OrderManagementScreenState extends State<OrderManagementScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                order.name,
+                order.customerName,
                 style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
               ),
               const SizedBox(height: 12),
@@ -403,7 +390,7 @@ class _OrderManagementScreenState extends State<OrderManagementScreen> {
                 Icons.directions_car_outlined,
                 const Color(0xFF3B5BF5),
                 const Color(0xFFEFF6FF),
-                '${order.plate}  ·  ${order.vehicleType}',
+                '${order.plateNumber}  ·  ${order.vehicleType}',
                 bold: true,
               ),
               const SizedBox(height: 8),
@@ -411,14 +398,14 @@ class _OrderManagementScreenState extends State<OrderManagementScreen> {
                 Icons.access_time_rounded,
                 const Color(0xFF7C3AED),
                 const Color(0xFFF5F3FF),
-                '${order.time} - ${order.date}',
+                '${order.appointmentTime} - ${order.appointmentDate}',
               ),
               const SizedBox(height: 8),
               _buildInfoRow(
                 Icons.location_on_outlined,
                 const Color(0xFFEA580C),
                 const Color(0xFFFFF7ED),
-                order.address,
+                order.stationAddress,
               ),
               const SizedBox(height: 14),
               const Divider(height: 1, color: Color(0xFFF3F4F6)),
@@ -523,30 +510,12 @@ class _OrderManagementScreenState extends State<OrderManagementScreen> {
   }
 }
 
-class _OrderItem {
-  final String id, name, plate, vehicleType, time, date, address, status;
-  final _StatusType statusType;
-  _OrderItem({
-    required this.id,
-    required this.name,
-    required this.plate,
-    required this.vehicleType,
-    required this.time,
-    required this.date,
-    required this.address,
-    required this.status,
-    required this.statusType,
-  });
-}
-
 class _FilterTab {
   final OrderFilter filter;
   final String label;
   final int count;
   _FilterTab(this.filter, this.label, this.count);
 }
-
-enum _StatusType { pending, processing, done }
 
 class _CircleDecorPainter extends CustomPainter {
   @override

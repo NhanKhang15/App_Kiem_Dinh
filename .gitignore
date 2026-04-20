@@ -43,3 +43,25 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Chat images
+image_chat/
+
+# Environment variables (chứa API keys - KHÔNG commit lên Git!)
+.env
+ios/Flutter/Env.xcconfig
+
+# Gradle build logs / debug dumps (local only)
+android/gradle_build_*.txt
+android/gradle_error.txt
+android/plain_log*.txt
+android/plain2_tail.txt
+
+# Claude Code / local diff state
+.claude/
+.ldiff/
+
+# Tài liệu đặc tả tạm (PDF + text extract ở root)
+Payment_analyze*.pdf
+payment_*_text.txt
+/text/

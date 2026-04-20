@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 class VehicleReturnScreen extends StatefulWidget {
   final String orderId;
@@ -24,8 +27,9 @@ class VehicleReturnScreen extends StatefulWidget {
 
 class _VehicleReturnScreenState extends State<VehicleReturnScreen> {
   final _noteCtrl = TextEditingController();
-  final List<bool> _photoTaken = List.filled(6, false);
+  final List<String?> _photoFiles = List.filled(6, null);
   final List<bool> _checkItems = List.filled(8, false);
+  final ImagePicker _imagePicker = ImagePicker();
   bool _hasSigned = false;
 
   final List<_ExtraFee> _extraFees = [];
@@ -52,7 +56,7 @@ class _VehicleReturnScreenState extends State<VehicleReturnScreen> {
     'Tem đăng kiểm đã dán',
   ];
 
-  int get _photoCount => _photoTaken.where((v) => v).length;
+  int get _photoCount => _photoFiles.where((v) => v != null).length;
   int get _checkCount => _checkItems.where((v) => v).length;
 
   @override
@@ -61,6 +65,80 @@ class _VehicleReturnScreenState extends State<VehicleReturnScreen> {
     _feeNameCtrl.dispose();
     _feeAmountCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickImage(int index) async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD1D5DB),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Text(
+                'Chọn nguồn ảnh',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF111827),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: const Icon(Icons.camera_alt_rounded,
+                    color: Color(0xFF2563EB)),
+                title: const Text('Chụp ảnh'),
+                subtitle: const Text('Mở camera để chụp'),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_rounded,
+                    color: Color(0xFF16A34A)),
+                title: const Text('Thư viện ảnh'),
+                subtitle: const Text('Chọn ảnh từ thiết bị'),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+              if (_photoFiles[index] != null)
+                ListTile(
+                  leading: const Icon(Icons.delete_outline_rounded,
+                      color: Color(0xFFDC2626)),
+                  title: const Text('Xóa ảnh'),
+                  onTap: () {
+                    setState(() => _photoFiles[index] = null);
+                    Navigator.pop(ctx);
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (source == null) return;
+
+    final picked = await _imagePicker.pickImage(
+      source: source,
+      imageQuality: 85,
+      maxWidth: 1920,
+      maxHeight: 1920,
+    );
+
+    if (picked == null || !mounted) return;
+
+    setState(() => _photoFiles[index] = picked.path);
   }
 
   void _showAddFeeDialog() {
@@ -339,9 +417,10 @@ class _VehicleReturnScreenState extends State<VehicleReturnScreen> {
         mainAxisSpacing: 12,
         childAspectRatio: 1.1,
         children: List.generate(6, (i) {
-          final taken = _photoTaken[i];
+          final filePath = _photoFiles[i];
+          final taken = filePath != null;
           return GestureDetector(
-            onTap: () => setState(() => _photoTaken[i] = !_photoTaken[i]),
+            onTap: () => _pickImage(i),
             child: Container(
               decoration: BoxDecoration(
                 color: taken ? const Color(0xFFEFFEF2) : const Color(0xFFF9FAFB),
@@ -351,25 +430,68 @@ class _VehicleReturnScreenState extends State<VehicleReturnScreen> {
                   width: taken ? 1.5 : 1,
                 ),
               ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  taken
-                      ? const Icon(Icons.check_circle_rounded, color: Color(0xFF16A34A), size: 28)
-                      : const Icon(Icons.camera_alt_outlined, color: Color(0xFF9CA3AF), size: 24),
-                  const SizedBox(height: 6),
-                  Text(_photoLabels[i].$2, style: const TextStyle(fontSize: 22)),
-                  const SizedBox(height: 4),
-                  Text(
-                    _photoLabels[i].$1,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: taken ? const Color(0xFF15803D) : const Color(0xFF6B7280),
-                      fontWeight: taken ? FontWeight.w600 : FontWeight.normal,
+              clipBehavior: Clip.antiAlias,
+              child: taken
+                  ? Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.file(
+                          File(filePath),
+                          fit: BoxFit.cover,
+                        ),
+                        Positioned(
+                          bottom: 0,
+                          left: 0,
+                          right: 0,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            color: const Color(0xCC16A34A),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  _photoLabels[i].$2,
+                                  style: const TextStyle(fontSize: 14),
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _photoLabels[i].$1,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const Positioned(
+                          top: 4,
+                          right: 4,
+                          child: Icon(Icons.check_circle_rounded,
+                              color: Color(0xFF16A34A), size: 22),
+                        ),
+                      ],
+                    )
+                  : Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.camera_alt_outlined,
+                            color: Color(0xFF9CA3AF), size: 24),
+                        const SizedBox(height: 6),
+                        Text(_photoLabels[i].$2,
+                            style: const TextStyle(fontSize: 22)),
+                        const SizedBox(height: 4),
+                        Text(
+                          _photoLabels[i].$1,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFF6B7280),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
-              ),
             ),
           );
         }),

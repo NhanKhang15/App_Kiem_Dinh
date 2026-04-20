@@ -17,6 +17,9 @@ import 'screens/loginscreen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Load .env file (chứa GOOGLE_MAPS_API_KEY và các key khác)
+
   NavigationHelper.navigatorKey = GlobalKey<NavigatorState>();
   SavedSession? session;
   try {

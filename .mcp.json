@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "litediff": {
+      "command": "node",
+      "args": [
+        "C:\\Users\\khang\\AppData\\Roaming\\litediff\\mcp-stdio.cjs"
+      ]
+    }
+  }
+}

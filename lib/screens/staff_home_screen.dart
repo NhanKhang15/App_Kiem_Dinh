@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:vehicle_registration_app/models/order_model.dart';
 import 'package:vehicle_registration_app/screens/order_detail_screen.dart';
 import 'package:vehicle_registration_app/screens/order_management_screen.dart';
 import 'package:vehicle_registration_app/services/auth_storage.dart';
+import 'package:vehicle_registration_app/services/staff_service.dart';
 
 class StaffHomeScreen extends StatefulWidget {
   const StaffHomeScreen({super.key});
@@ -12,59 +14,67 @@ class StaffHomeScreen extends StatefulWidget {
 
 class _StaffHomeScreenState extends State<StaffHomeScreen> {
   int _currentIndex = 0;
+  final StaffService _staffService = StaffService();
+  List<OrderModel> _orders = [];
+  bool _isLoading = true;
+  int _activeCount = 0;
+  int _doneCount = 0;
 
-  final List<_OrderItem> _orders = [
-    _OrderItem(
-      id: 'DK001',
-      name: 'Trần Minh Tuấn',
-      plate: 'BKS: 30A-123.45',
-      status: 'Chờ xử lý',
-      time: '08:30',
-      statusType: _StatusType.pending,
-    ),
-    _OrderItem(
-      id: 'DK002',
-      name: 'Nguyễn Thị Hương',
-      plate: 'BKS: 29B-678.90',
-      status: 'Đang xử lý',
-      time: '09:00',
-      statusType: _StatusType.processing,
-    ),
-    _OrderItem(
-      id: 'DK003',
-      name: 'Phạm Đức Anh',
-      plate: 'BKS: 51F-234.56',
-      status: 'Chờ xử lý',
-      time: '10:30',
-      statusType: _StatusType.pending,
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    setState(() => _isLoading = true);
+    try {
+      final response = await _staffService.getRecentOrders();
+      setState(() {
+        _orders = response.orders;
+        final activeTypes = ['pending', 'confirmed', 'en_route', 'receiving', 'inspecting', 'returning', 'waiting_payment', 'in_progress'];
+        _activeCount = _orders.where((o) => activeTypes.contains(o.statusType)).length;
+        _doneCount = _orders.where((o) => o.statusType == 'completed').length;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi tải dữ liệu: $e')),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF3F7F3),
-      body: Column(
-        children: [
-          Expanded(
-            child: IndexedStack(
-              index: _currentIndex,
-              children: [
-                _buildHomeTab(),
-                const OrderManagementScreen(),
-                _buildProfileTab(),
-              ],
+      body: RefreshIndicator(
+        onRefresh: _loadData,
+        child: Column(
+          children: [
+            Expanded(
+              child: IndexedStack(
+                index: _currentIndex,
+                children: [
+                  _buildHomeTab(),
+                  const OrderManagementScreen(),
+                  _buildProfileTab(),
+                ],
+              ),
             ),
-          ),
-          _buildBottomNavBar(),
-        ],
+            _buildBottomNavBar(),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildHomeTab() {
     return SingleChildScrollView(
-      physics: const ClampingScrollPhysics(),
+      physics: const AlwaysScrollableScrollPhysics(),
       child: Column(
         children: [
           _buildHeaderWithOverlap(),
@@ -149,7 +159,7 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text(
-                              'Xin chào, Trần Văn B\n(Nhân viên)!',
+                              'Xin chào, Nhân viên!',
                               style: TextStyle(
                                 color: Colors.white,
                                 fontSize: 22,
@@ -159,7 +169,7 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              'Ngày 27/2/2026',
+                              'Hệ thống quản lý kiểm định',
                               style: TextStyle(
                                 color: Colors.white.withOpacity(0.75),
                                 fontSize: 13,
@@ -188,14 +198,12 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
             ],
           ),
         ),
-
         Positioned(
           left: cardsMargin,
           right: cardsMargin,
           bottom: 70,
           child: _buildStatsRow(),
         ),
-
         Positioned(
           left: cardsMargin,
           right: cardsMargin,
@@ -211,9 +219,9 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
       children: [
         Expanded(
           child: _buildStatCard(
-            value: '1',
+            value: _activeCount.toString(),
             label: 'Đang hoạt động',
-            subtitle: 'Số đơn bạn đang làm\n(chưa hoàn thành)',
+            subtitle: 'Số đơn đang chờ hoặc đang xử lý',
             iconBg: const Color(0xFFFFF0E8),
             iconColor: const Color(0xFFF97316),
             icon: Icons.trending_up_rounded,
@@ -222,9 +230,9 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
         const SizedBox(width: 12),
         Expanded(
           child: _buildStatCard(
-            value: '1',
+            value: _doneCount.toString(),
             label: 'Hoàn thành',
-            subtitle: 'Số đơn bạn đã hoàn\nthành thành công',
+            subtitle: 'Số đơn đã hoàn thành thành công',
             iconBg: const Color(0xFFE8F5E9),
             iconColor: const Color(0xFF16A34A),
             icon: Icons.check_circle_outline_rounded,
@@ -289,6 +297,8 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
           const SizedBox(height: 4),
           Text(
             subtitle,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontSize: 11,
               color: Colors.grey.shade500,
@@ -330,14 +340,14 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
           _buildExplainRow(
             '• ',
             'Đang hoạt động',
-            ': Đơn bạn đang làm, chưa hoàn tất',
+            ': Đơn chờ hoặc đang làm',
             const Color(0xFF2563EB),
           ),
           const SizedBox(height: 4),
           _buildExplainRow(
             '• ',
             'Hoàn thành',
-            ': Đơn bạn đã làm xong thành công',
+            ': Đơn đã làm xong thành công',
             const Color(0xFF16A34A),
           ),
         ],
@@ -365,6 +375,15 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
   }
 
   Widget _buildOrdersSection() {
+    if (_isLoading) {
+      return const Center(child: Padding(
+        padding: EdgeInsets.all(32.0),
+        child: CircularProgressIndicator(),
+      ));
+    }
+
+    final recentOrders = _orders.take(5).toList();
+
     return Column(
       children: [
         Row(
@@ -379,7 +398,7 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
             ),
             const Spacer(),
             GestureDetector(
-              onTap: () {},
+              onTap: () => setState(() => _currentIndex = 1),
               child: Row(
                 children: const [
                   Text(
@@ -411,45 +430,52 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
               ),
             ],
           ),
-          child: Column(
-            children: List.generate(_orders.length, (i) {
-              final order = _orders[i];
-              final isLast = i == _orders.length - 1;
-              return Column(
-                children: [
-                  _buildOrderRow(order),
-                  if (!isLast)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Divider(
-                          height: 1, color: Colors.grey.shade100),
-                    ),
-                ],
-              );
-            }),
-          ),
+          child: recentOrders.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(24.0),
+                  child: Text('Không có đơn hàng nào'),
+                )
+              : Column(
+                  children: List.generate(recentOrders.length, (i) {
+                    final order = recentOrders[i];
+                    final isLast = i == recentOrders.length - 1;
+                    return Column(
+                      children: [
+                        _buildOrderRow(order),
+                        if (!isLast)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Divider(
+                                height: 1, color: Colors.grey.shade100),
+                          ),
+                      ],
+                    );
+                  }),
+                ),
         ),
       ],
     );
   }
 
-  Widget _buildOrderRow(_OrderItem order) {
+  Widget _buildOrderRow(OrderModel order) {
     return GestureDetector(
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => OrderDetailScreen(
               orderId: order.id,
-              customerName: order.name,
+              customerName: order.customerName,
               statusLabel: order.status,
-              statusType: order.statusType == _StatusType.pending
+              statusType: ['pending', 'confirmed'].contains(order.statusType)
                   ? OrderStatusType.pending
-                  : order.statusType == _StatusType.processing
+                  : ['en_route', 'receiving', 'inspecting', 'returning', 'waiting_payment', 'in_progress'].contains(order.statusType)
                   ? OrderStatusType.processing
-                  : OrderStatusType.done,
+                  : order.statusType == 'completed'
+                  ? OrderStatusType.done
+                  : OrderStatusType.cancelled,
             ),
           ),
-        );
+        ).then((_) => _loadData());
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -473,7 +499,7 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    order.id,
+                    order.order_code,
                     style: const TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.bold,
@@ -482,13 +508,13 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    order.name,
+                    order.customerName,
                     style: TextStyle(
                         fontSize: 13, color: Colors.grey.shade600),
                   ),
                   const SizedBox(height: 1),
                   Text(
-                    order.plate,
+                    'BKS: ${order.plateNumber}',
                     style: TextStyle(
                         fontSize: 11.5, color: Colors.grey.shade400),
                   ),
@@ -501,7 +527,7 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
                 _buildStatusBadge(order.status, order.statusType),
                 const SizedBox(height: 6),
                 Text(
-                  order.time,
+                  order.appointmentTime,
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.grey.shade400,
@@ -516,22 +542,31 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
     );
   }
 
-  Widget _buildStatusBadge(String label, _StatusType type) {
+  Widget _buildStatusBadge(String label, String type) {
     Color bg;
     Color text;
     switch (type) {
-      case _StatusType.pending:
+      case 'pending':
+      case 'confirmed':
         bg = const Color(0xFFFFF3E0);
         text = const Color(0xFFE65100);
         break;
-      case _StatusType.processing:
+      case 'en_route':
+      case 'receiving':
+      case 'inspecting':
+      case 'returning':
+      case 'waiting_payment':
+      case 'in_progress':
         bg = const Color(0xFFE3F2FD);
         text = const Color(0xFF1565C0);
         break;
-      case _StatusType.done:
+      case 'completed':
         bg = const Color(0xFFE8F5E9);
         text = const Color(0xFF2E7D32);
         break;
+      default:
+        bg = const Color(0xFFF3F4F6);
+        text = const Color(0xFF6B7280);
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -705,21 +740,6 @@ class _StaffHomeScreenState extends State<StaffHomeScreen> {
       ),
     );
   }
-}
-
-enum _StatusType { pending, processing, done }
-
-class _OrderItem {
-  final String id, name, plate, status, time;
-  final _StatusType statusType;
-  _OrderItem({
-    required this.id,
-    required this.name,
-    required this.plate,
-    required this.status,
-    required this.time,
-    required this.statusType,
-  });
 }
 
 class _NavTab {
