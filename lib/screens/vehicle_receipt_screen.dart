@@ -10,6 +10,10 @@ import 'package:vehicle_registration_app/models/image_requirement.dart';
 import 'package:vehicle_registration_app/models/uploaded_media.dart';
 import 'package:vehicle_registration_app/services/payment_service.dart';
 import 'package:vehicle_registration_app/services/vehicle_receipt_service.dart';
+import 'package:vehicle_registration_app/widgets/image_picker_sheet.dart';
+import 'package:vehicle_registration_app/widgets/in_app_document_viewer.dart';
+import 'package:vehicle_registration_app/widgets/payment_polling_helper.dart';
+import 'package:vehicle_registration_app/widgets/signature_pad_widget.dart';
 
 enum ReceiptProcessStep {
   contractSign,
@@ -27,12 +31,12 @@ class VehicleReceiptScreen extends StatefulWidget {
 
   const VehicleReceiptScreen({
     super.key,
-    this.orderId = 'DK002',
-    this.customerName = 'Nguyễn Thị Hương',
-    this.plate = '29B-678.90',
-    this.vehicleType = 'Ô tô con',
-    this.brand = 'Honda City',
-    this.totalCost = '340.000đ',
+    required this.orderId,
+    required this.customerName,
+    required this.plate,
+    required this.vehicleType,
+    required this.brand,
+    required this.totalCost,
   });
 
   @override
@@ -56,6 +60,7 @@ class _VehicleReceiptScreenState extends State<VehicleReceiptScreen> {
   );
 
   final ImagePicker _imagePicker = ImagePicker();
+  final GlobalKey<SignaturePadWidgetState> _signaturePadKey = GlobalKey<SignaturePadWidgetState>();
   bool _hasSigned = false;
   bool _showSignaturePad = false;
   bool _paymentCompleted = false;
@@ -64,7 +69,18 @@ class _VehicleReceiptScreenState extends State<VehicleReceiptScreen> {
   ReceiptProcessStep _currentStep = ReceiptProcessStep.contractSign;
   late final VehicleReceiptService _receiptService;
   late final PaymentService _paymentService;
+  late final PaymentPollingHelper _pollingHelper;
   Timer? _pollingTimer;
+
+  // === State cho API 5.1: Initialize Receipt ===
+  /// Đã gọi API initialize thành công hay chưa
+  bool _receiptInitialized = false;
+  /// Lỗi khi gọi initialize (nếu có)
+  String? _initializeError;
+
+  // === State cho contract URL từ API 5.2 response ===
+  /// URL tải hợp đồng PDF từ response sau khi complete
+  String? _contractPdfUrl;
 
   // === State mới cho API upload ảnh ===
   /// Danh sách requirement ảnh từ API 1 (dynamic, thay thế hardcode)
@@ -188,6 +204,7 @@ class _VehicleReceiptScreenState extends State<VehicleReceiptScreen> {
     super.initState();
     _receiptService = VehicleReceiptService();
     _paymentService = PaymentService();
+    _pollingHelper = PaymentPollingHelper(paymentService: _paymentService);
     _signatureCtrl.onDrawEnd = () {
       if (!mounted) return;
       setState(() => _hasSigned = _signatureCtrl.isNotEmpty);
@@ -196,26 +213,30 @@ class _VehicleReceiptScreenState extends State<VehicleReceiptScreen> {
     _loadRequirementsAndMedia();
   }
 
-  /// Gọi API 1 (image-requirements) và API 3 (uploaded media) song song.
+  /// Gọi API 5.1 (initialize), API 1 (image-requirements) và API 3 (uploaded media) song song.
   Future<void> _loadRequirementsAndMedia() async {
     setState(() {
       _isLoadingRequirements = true;
       _requirementsError = null;
+      _initializeError = null;
     });
 
     try {
+      // Gọi song song: Initialize receipt + Fetch requirements + Fetch uploaded
       final results = await Future.wait([
         _receiptService.getImageRequirements(stage: 'RECEIVE'),
         _receiptService.getUploadedMedia(
           orderId: widget.orderId,
           stage: 'RECEIVE',
         ),
+        _receiptService.initializeReceipt(orderId: widget.orderId),
       ]);
 
       if (!mounted) return;
 
       final requirements = results[0] as List<ImageRequirement>;
       final uploadedList = results[1] as List<UploadedMedia>;
+      final initResult = results[2] as Map<String, dynamic>?;
 
       // Build map requirement_id -> UploadedMedia
       final uploadedMap = <int, UploadedMedia>{};
@@ -227,78 +248,45 @@ class _VehicleReceiptScreenState extends State<VehicleReceiptScreen> {
         _requirements = requirements;
         _uploadedMap = uploadedMap;
         _isLoadingRequirements = false;
+        // initResult == null nghĩa là biên bản đã tồn tại (400) → vẫn OK
+        _receiptInitialized = true;
       });
+
+      if (initResult != null) {
+        print('=== Receipt initialized thành công ===');
+      } else {
+        print('=== Receipt đã tồn tại (đã init trước đó) ===');
+      }
     } catch (e) {
       if (!mounted) return;
+
+      // Phân loại lỗi: nếu lỗi từ initializeReceipt (403/404) thì báo riêng
+      String errorMsg = 'Không thể tải danh sách ảnh yêu cầu: $e';
+      if (e is DioException) {
+        final status = e.response?.statusCode;
+        if (status == 403) {
+          errorMsg = 'Chỉ nhân viên mới có quyền thực hiện nhận xe.';
+        } else if (status == 404) {
+          errorMsg = 'Đơn hàng không tồn tại.';
+        }
+      }
+
       setState(() {
         _isLoadingRequirements = false;
-        _requirementsError = 'Không thể tải danh sách ảnh yêu cầu: $e';
+        _requirementsError = errorMsg;
       });
       print('=== DEBUG: LỖI loadRequirementsAndMedia ===');
       print(e.toString());
     }
   }
 
-  /// Chọn và upload ảnh cho một requirement cụ thể.
-  /// [requirement] - requirement từ API 1 (chứa id, name, category, position)
+
   Future<void> _pickAndUploadImage(ImageRequirement requirement) async {
     final alreadyUploaded = _uploadedMap.containsKey(requirement.id);
 
-    final source = await showModalBottomSheet<ImageSource>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD1D5DB),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              Text(
-                requirement.name,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF111827),
-                ),
-              ),
-              const SizedBox(height: 16),
-              ListTile(
-                leading: const Icon(Icons.camera_alt_rounded,
-                    color: Color(0xFF2563EB)),
-                title: const Text('Chụp ảnh'),
-                subtitle: const Text('Mở camera để chụp'),
-                onTap: () => Navigator.pop(ctx, ImageSource.camera),
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_library_rounded,
-                    color: Color(0xFF16A34A)),
-                title: const Text('Thư viện ảnh'),
-                subtitle: const Text('Chọn ảnh từ thiết bị'),
-                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-              ),
-              if (alreadyUploaded)
-                ListTile(
-                  leading: const Icon(Icons.refresh_rounded,
-                      color: Color(0xFFF59E0B)),
-                  title: const Text('Chụp lại'),
-                  subtitle: const Text('Thay thế ảnh đã upload'),
-                  onTap: () => Navigator.pop(ctx, ImageSource.camera),
-                ),
-            ],
-          ),
-        ),
-      ),
+    final source = await ImagePickerSheet.show(
+      context,
+      title: requirement.name,
     );
 
     if (source == null) return;
@@ -371,6 +359,7 @@ class _VehicleReceiptScreenState extends State<VehicleReceiptScreen> {
   @override
   void dispose() {
     _pollingTimer?.cancel();
+    _pollingHelper.dispose();
     _nameCtrl.dispose();
     _birthDateCtrl.dispose();
     _idCtrl.dispose();
@@ -510,74 +499,20 @@ class _VehicleReceiptScreenState extends State<VehicleReceiptScreen> {
   }
 
   void _showQRDialog(String qrImageUrl, int orderCode) {
-    showDialog(
+    _pollingHelper.showQRDialogAndPoll(
       context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text('Quét mã QR thanh toán', textAlign: TextAlign.center),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.network(
-                  qrImageUrl,
-                  width: 250,
-                  height: 250,
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) => const SizedBox(
-                    width: 250,
-                    height: 250,
-                    child: Center(child: Icon(Icons.broken_image, size: 50, color: Colors.grey)),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Text('Vui lòng khách hàng quét mã để thanh toán.', textAlign: TextAlign.center),
-              const SizedBox(height: 8),
-              const CircularProgressIndicator(),
-              const SizedBox(height: 8),
-              const Text('Đang chờ hệ thống PayOS...', style: TextStyle(fontSize: 12, color: Colors.grey)),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                _pollingTimer?.cancel();
-                Navigator.pop(ctx);
-              },
-              child: const Text('Huỷ / Đóng'),
-            ),
-          ],
-        );
+      qrImageUrl: qrImageUrl,
+      orderCode: orderCode,
+      onSuccess: () {
+        if (!mounted) return;
+        setState(() => _paymentCompleted = true);
+        _showMessage('Khách hàng đã thanh toán QR thành công!', backgroundColor: const Color(0xFF16A34A));
+      },
+      onFailed: () {
+        if (!mounted) return;
+        _showMessage('Thanh toán thất bại hoặc đã hết hạn.', backgroundColor: const Color(0xFFDC2626));
       },
     );
-
-    // Bắt đầu polling
-    _pollingTimer?.cancel();
-    _pollingTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
-      try {
-        final statusRes = await _paymentService.checkPaymentStatus(orderCode);
-        if (statusRes['status'] == 'SUCCESS') {
-          timer.cancel();
-          if (!mounted) return;
-          Navigator.pop(context); // Đóng popup
-          setState(() {
-            _paymentCompleted = true;
-          });
-          _showMessage('Khách hàng đã thanh toán QR thành công!', backgroundColor: const Color(0xFF16A34A));
-        } else if (statusRes['status'] == 'FAILED') {
-          timer.cancel();
-          if (!mounted) return;
-          Navigator.pop(context); // Đóng popup
-          _showMessage('Thanh toán thất bại hoặc đã hết hạn.', backgroundColor: const Color(0xFFDC2626));
-        }
-      } catch (e) {
-        print('Polling error: $e');
-      }
-    });
   }
 
   void _goToCaptureStep() {
@@ -615,8 +550,8 @@ class _VehicleReceiptScreenState extends State<VehicleReceiptScreen> {
         return;
       }
 
-      // Gọi API
-      await _receiptService.submitVehicleReceipt(
+      // Gọi API 5.2 — Complete Vehicle Received
+      final response = await _receiptService.submitVehicleReceipt(
         orderId: widget.orderId,
         customerName: _nameCtrl.text.trim(),
         customerPhone: _phoneCtrl.text.trim(),
@@ -631,9 +566,26 @@ class _VehicleReceiptScreenState extends State<VehicleReceiptScreen> {
       );
 
       if (!mounted) return;
-      setState(() => _isSubmitting = false);
 
-      // Hiển thị dialog thành công
+      // Parse contract URLs từ response API 5.2
+      String? contractPdfUrl;
+      String? contractFileUrl;
+      final orderData = response['order'];
+      if (orderData is Map<String, dynamic>) {
+        contractPdfUrl = orderData['contract_pdf_download_url']?.toString();
+        contractFileUrl = orderData['contract_file']?.toString();
+        print('=== DEBUG: Contract URLs ===');
+        print('PDF download: $contractPdfUrl');
+        print('DOCX file: $contractFileUrl');
+        print('============================');
+      }
+
+      setState(() {
+        _isSubmitting = false;
+        _contractPdfUrl = contractPdfUrl;
+      });
+
+      // Hiển thị dialog thành công (có nút xem hợp đồng nếu có URL)
       showDialog<void>(
         context: context,
         barrierDismissible: false,
@@ -648,8 +600,43 @@ class _VehicleReceiptScreenState extends State<VehicleReceiptScreen> {
               size: 56,
             ),
             title: const Text('Hoàn thành quy trình'),
-            content: const Text(
-              'Biên bản nhận xe đã được lưu thành công lên hệ thống.',
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Biên bản nhận xe và hợp đồng đã được tạo thành công.',
+                ),
+                if (contractPdfUrl != null) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEFF6FF),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFBFDBFE)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.description_rounded,
+                          color: Color(0xFF2563EB),
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Hợp đồng PDF đã sẵn sàng để xem.',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF1E40AF),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
             ),
             actions: [
               TextButton(
@@ -659,6 +646,25 @@ class _VehicleReceiptScreenState extends State<VehicleReceiptScreen> {
                 },
                 child: const Text('Đóng'),
               ),
+              if (contractPdfUrl != null)
+                FilledButton.icon(
+                  onPressed: () {
+                    Navigator.of(dialogContext).pop();
+                    // Mở InAppDocumentViewer để xem hợp đồng PDF
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => InAppDocumentViewer(
+                          orderId: widget.orderId,
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.picture_as_pdf_rounded, size: 18),
+                  label: const Text('Xem hợp đồng'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                  ),
+                ),
             ],
           );
         },

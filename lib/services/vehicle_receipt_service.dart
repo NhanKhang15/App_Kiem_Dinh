@@ -23,6 +23,54 @@ class VehicleReceiptService {
   }
 
   // ============================================================
+  // API 5.1: Khởi tạo biên bản nhận xe
+  // POST /api/orders/{order_id}/vehicle_receipt_initialize/
+  // ============================================================
+
+  /// Khởi tạo biên bản nhận xe (VehicleReceiptLog) cho một đơn hàng.
+  ///
+  /// **Phải gọi trước** API complete-vehicle-received (5.2).
+  /// Nếu biên bản đã tồn tại (HTTP 400), trả về null mà không throw —
+  /// điều này cho phép gọi lại an toàn khi user quay lại màn hình.
+  ///
+  /// Returns response map nếu thành công (201), null nếu đã tồn tại.
+  Future<Map<String, dynamic>?> initializeReceipt({
+    required String orderId,
+  }) async {
+    await _ensureToken();
+
+    final path = 'orders/$orderId/vehicle_receipt_initialize/';
+
+    try {
+      print('=== DEBUG: initializeReceipt ===');
+      print('orderId: "$orderId"');
+      print('full URL: ${_api.dio.options.baseUrl}$path');
+      print('================================');
+
+      final response = await _api.dio.post(path);
+
+      print('=== DEBUG: initializeReceipt RESPONSE ===');
+      print('Status: ${response.statusCode}');
+      print('Data: ${response.data}');
+      print('==========================================');
+
+      if (response.data is Map<String, dynamic>) {
+        return response.data as Map<String, dynamic>;
+      }
+      return {'success': true};
+    } on DioException catch (e) {
+      // 400 = "Biên bản đã tồn tại" → không phải lỗi, chỉ là đã init rồi
+      if (e.response?.statusCode == 400) {
+        print('=== DEBUG: initializeReceipt 400 (đã tồn tại, bỏ qua) ===');
+        return null;
+      }
+      print('=== DEBUG: LỖI initializeReceipt ===');
+      print(e.toString());
+      rethrow;
+    }
+  }
+
+  // ============================================================
   // API 1: Lấy danh sách cấu hình ảnh bắt buộc
   // GET /api/v1/image-requirements/?stage=RECEIVE
   // ============================================================
@@ -223,9 +271,17 @@ class VehicleReceiptService {
       ),
     });
 
+    final path = 'orders/$orderId/complete-vehicle-received/';
+    print('=== DEBUG: submitVehicleReceipt ===');
+    print('orderId: "$orderId" (length=${orderId.length})');
+    print('baseUrl: ${_api.dio.options.baseUrl}');
+    print('full URL: ${_api.dio.options.baseUrl}$path');
+    print('Authorization: ${_api.dio.options.headers['Authorization']}');
+    print('===================================');
+
     try {
       final response = await _api.dio.post(
-        'orders/$orderId/complete-vehicle-received/',
+        path,
         data: formData,
       );
 

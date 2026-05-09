@@ -128,13 +128,15 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   Future<void> _sendCurrentLocation() async {
     try {
       final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        locationSettings:
+            const LocationSettings(accuracy: LocationAccuracy.high),
       );
       await _processNewPosition(position, forcePush: true);
     } catch (_) {}
   }
 
-  Future<void> _processNewPosition(Position position, {bool forcePush = false}) async {
+  Future<void> _processNewPosition(Position position,
+      {bool forcePush = false}) async {
     final order = _order;
     if (order == null) return;
 
@@ -220,7 +222,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : _order == null
-                    ? const Center(child: Text('Khong tai duoc chi tiet don hang'))
+                    ? const Center(
+                        child: Text('Khong tai duoc chi tiet don hang'))
                     : RefreshIndicator(
                         onRefresh: _loadDetail,
                         child: ListView(
@@ -237,12 +240,25 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
 
   Widget _buildHeader(BuildContext context) {
     final order = _order;
-    final statusType = order != null ? _resolveStatusType(order) : widget.statusType;
+    final statusType =
+        order != null ? _resolveStatusType(order) : widget.statusType;
     final (badgeBg, badgeText) = switch (statusType) {
-      OrderStatusType.pending => (const Color(0xFFFFF3E0), const Color(0xFFE65100)),
-      OrderStatusType.processing => (const Color(0xFFE3F2FD), const Color(0xFF1565C0)),
-      OrderStatusType.done => (const Color(0xFFE8F5E9), const Color(0xFF2E7D32)),
-      OrderStatusType.cancelled => (const Color(0xFFF3F4F6), const Color(0xFF6B7280)),
+      OrderStatusType.pending => (
+          const Color(0xFFFFF3E0),
+          const Color(0xFFE65100)
+        ),
+      OrderStatusType.processing => (
+          const Color(0xFFE3F2FD),
+          const Color(0xFF1565C0)
+        ),
+      OrderStatusType.done => (
+          const Color(0xFFE8F5E9),
+          const Color(0xFF2E7D32)
+        ),
+      OrderStatusType.cancelled => (
+          const Color(0xFFF3F4F6),
+          const Color(0xFF6B7280)
+        ),
     };
 
     return Container(
@@ -265,9 +281,12 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.arrow_back_rounded, size: 18, color: Color(0xFF374151)),
+                    Icon(Icons.arrow_back_rounded,
+                        size: 18, color: Color(0xFF374151)),
                     SizedBox(width: 6),
-                    Text('Quay lai', style: TextStyle(fontSize: 14, color: Color(0xFF374151))),
+                    Text('Quay lai',
+                        style:
+                            TextStyle(fontSize: 14, color: Color(0xFF374151))),
                   ],
                 ),
               ),
@@ -280,25 +299,33 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                       children: [
                         const Text(
                           'Chi tiet don hang',
-                          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                              fontSize: 22, fontWeight: FontWeight.bold),
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          order?.order_code.isNotEmpty == true ? order!.order_code : widget.orderId,
-                          style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+                          order?.order_code.isNotEmpty == true
+                              ? order!.order_code
+                              : widget.orderId,
+                          style: const TextStyle(
+                              fontSize: 13, color: Color(0xFF6B7280)),
                         ),
                       ],
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
                       color: badgeBg,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Text(
                       order?.status ?? widget.statusLabel,
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: badgeText),
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: badgeText),
                     ),
                   ),
                 ],
@@ -362,12 +389,16 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     ];
   }
 
-  Widget _infoCard(String title, IconData icon, Color color, List<Widget> rows) {
+  Widget _infoCard(
+      String title, IconData icon, Color color, List<Widget> rows) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: const [BoxShadow(color: Color(0x07000000), blurRadius: 10, offset: Offset(0, 2))],
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x07000000), blurRadius: 10, offset: Offset(0, 2))
+        ],
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -378,7 +409,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               children: [
                 Icon(icon, color: color, size: 20),
                 const SizedBox(width: 8),
-                Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                Text(title,
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold)),
               ],
             ),
             const SizedBox(height: 14),
@@ -393,11 +426,13 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(
-        crossAxisAlignment: multiline ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+        crossAxisAlignment:
+            multiline ? CrossAxisAlignment.start : CrossAxisAlignment.center,
         children: [
           SizedBox(
             width: 110,
-            child: Text(label, style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
+            child: Text(label,
+                style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
           ),
           Expanded(
             child: Text(
@@ -419,15 +454,20 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       const Color(0xFF16A34A),
       [
         if (services.isEmpty)
-          const Text('Chua co dich vu duoc khai bao', style: TextStyle(fontSize: 13))
+          const Text('Chua co dich vu duoc khai bao',
+              style: TextStyle(fontSize: 13))
         else
           ...services.map(
             (service) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: Row(
                 children: [
-                  Expanded(child: Text(service.name, style: const TextStyle(fontSize: 13))),
-                  Text(service.price, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                  Expanded(
+                      child: Text(service.name,
+                          style: const TextStyle(fontSize: 13))),
+                  Text(service.price,
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w700)),
                 ],
               ),
             ),
@@ -435,9 +475,11 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         const Divider(height: 20),
         Row(
           children: [
-            const Text('Tong cong', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text('Tong cong',
+                style: TextStyle(fontWeight: FontWeight.bold)),
             const Spacer(),
-            Text(order.totalCost ?? '0', style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text(order.totalCost ?? '0',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
           ],
         ),
       ],
@@ -449,7 +491,10 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: const [BoxShadow(color: Color(0x07000000), blurRadius: 10, offset: Offset(0, 2))],
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x07000000), blurRadius: 10, offset: Offset(0, 2))
+        ],
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -458,9 +503,12 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           children: [
             const Row(
               children: [
-                Icon(Icons.location_on_rounded, color: Color(0xFF2563EB), size: 20),
+                Icon(Icons.location_on_rounded,
+                    color: Color(0xFF2563EB), size: 20),
                 SizedBox(width: 8),
-                Text('Ban do tram dang kiem', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                Text('Ban do tram dang kiem',
+                    style:
+                        TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
               ],
             ),
             const SizedBox(height: 12),
@@ -468,12 +516,15 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               borderRadius: BorderRadius.circular(12),
               child: SizedBox(
                 height: 200,
-                child: _buildMapContent(order.stationLat, order.stationLng, order.stationAddress),
+                child: _buildMapContent(
+                    order.stationLat, order.stationLng, order.stationAddress),
               ),
             ),
             if (order.stationAddress.isNotEmpty) ...[
               const SizedBox(height: 10),
-              Text(order.stationAddress, style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
+              Text(order.stationAddress,
+                  style:
+                      const TextStyle(fontSize: 12, color: Color(0xFF6B7280))),
             ],
           ],
         ),
@@ -497,7 +548,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               Marker(
                 markerId: const MarkerId('station'),
                 position: center,
-                infoWindow: InfoWindow(title: address.isNotEmpty ? address : 'Trạm đăng kiểm'),
+                infoWindow: InfoWindow(
+                    title: address.isNotEmpty ? address : 'Trạm đăng kiểm'),
               ),
             }
           : {},
@@ -520,15 +572,20 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.info_outline_rounded, color: Color(0xFFF59E0B), size: 18),
+          const Icon(Icons.info_outline_rounded,
+              color: Color(0xFFF59E0B), size: 18),
           const SizedBox(width: 8),
-          Expanded(child: Text(note, style: const TextStyle(fontSize: 13, color: Color(0xFFB45309)))),
+          Expanded(
+              child: Text(note,
+                  style:
+                      const TextStyle(fontSize: 13, color: Color(0xFFB45309)))),
         ],
       ),
     );
   }
 
-  Widget _buildStatusActions(BuildContext context, OrderModel order, OrderStatusType statusType) {
+  Widget _buildStatusActions(
+      BuildContext context, OrderModel order, OrderStatusType statusType) {
     switch (statusType) {
       case OrderStatusType.pending:
         return _actionButtons(context, order, pending: true);
@@ -541,15 +598,20 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     }
   }
 
-  Widget _actionButtons(BuildContext context, OrderModel order, {bool pending = false}) {
+  Widget _actionButtons(BuildContext context, OrderModel order,
+      {bool pending = false}) {
     return Column(
       children: [
         if (pending)
           Row(
             children: [
-              Expanded(child: _primaryButton('Goi khach', Icons.phone_rounded, () {})),
+              Expanded(
+                  child:
+                      _primaryButton('Goi khach', Icons.phone_rounded, () {})),
               const SizedBox(width: 12),
-              Expanded(child: _primaryButton('Bat dau', Icons.play_circle_outline_rounded, _startTracking)),
+              Expanded(
+                  child: _primaryButton('Bat dau',
+                      Icons.play_circle_outline_rounded, _startTracking)),
             ],
           )
         else ...[
@@ -558,7 +620,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           Row(
             children: [
               Expanded(
-                child: _primaryButton('Nhan xe', Icons.check_circle_outline_rounded, () {
+                child: _primaryButton(
+                    'Nhan xe', Icons.check_circle_outline_rounded, () {
                   Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => VehicleReceiptScreen(
@@ -575,7 +638,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: _primaryButton('Tra xe', Icons.assignment_return_outlined, () {
+                child: _primaryButton(
+                    'Tra xe', Icons.assignment_return_outlined, () {
                   Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => VehicleReturnScreen(
@@ -585,6 +649,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                         vehicleType: order.vehicleType,
                         brand: order.vehicleBrand,
                         color: order.vehicleColor,
+                        orderStatusType: order.statusType,
                       ),
                     ),
                   );
@@ -593,7 +658,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          _primaryButton('Chup va tai anh giay to', Icons.camera_alt_outlined, () {
+          _primaryButton('Chup va tai anh giay to', Icons.camera_alt_outlined,
+              () {
             Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => DocumentUploadScreen(
@@ -608,14 +674,16 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     );
   }
 
-  Widget _primaryButton(String label, IconData icon, VoidCallback onTap, {bool fullWidth = false}) {
+  Widget _primaryButton(String label, IconData icon, VoidCallback onTap,
+      {bool fullWidth = false}) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
         width: fullWidth ? double.infinity : null,
         height: 52,
         decoration: BoxDecoration(
-          gradient: const LinearGradient(colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)]),
+          gradient: const LinearGradient(
+              colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)]),
           borderRadius: BorderRadius.circular(14),
         ),
         child: Row(
@@ -623,7 +691,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           children: [
             Icon(icon, color: Colors.white, size: 18),
             const SizedBox(width: 8),
-            Text(label, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            Text(label,
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold)),
           ],
         ),
       ),
@@ -642,7 +712,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           border: Border.all(color: const Color(0xFFFECACA)),
         ),
         child: Center(
-          child: Text(label, style: const TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
+          child: Text(label,
+              style: const TextStyle(
+                  color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
         ),
       ),
     );
